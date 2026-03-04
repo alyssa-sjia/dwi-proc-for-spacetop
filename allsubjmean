@@ -1,0 +1,100 @@
+%% init
+% NOTE : dependencies
+% micaopen: SurfStat - see also BrainStat for similar functions
+% micasoft: mica_parcelData2surfData
+% gifti: in micasoft but can also be downloaded directly
+% micapipe: surface sfiles
+
+for set_directories = 1
+
+    
+    
+    % directories
+    GH = '/data/u_nunnink_software';
+    micaopen = [GH, '/micaopen'];
+    micapipe = [GH, '/micapipe'];
+    giftidir  = [GH, '/gifti'];
+    dataset = '/data/p_03140/BIDS_spacetop';
+    deriv_dir = [dataset, '/derivatives'];
+    micapipe_deriv = [deriv_dir, '/micapipe_v0.2.0'];
+    
+    % set path
+    addpath(genpath([micaopen,'/surfstat']));
+    addpath(genpath([micaopen,'/mica_powertools']));
+    addpath(genpath([GH, '/gifti']));
+
+    % surface
+    tmp = gifti([micapipe,'/surfaces/fsLR-32k.L.surf.gii']);
+    lh = struct(); lh.coord = tmp.vertices'; lh.tri = tmp.faces;
+    tmp = gifti([micapipe,'/surfaces/fsLR-32k.R.surf.gii']);
+    rh = struct(); rh.coord = tmp.vertices'; rh.tri = tmp.faces;
+    clear tmp
+    surf = struct(); surf.coord = [lh.coord, rh.coord]; surf.tri = [lh.tri; rh.tri+max(max(lh.tri))]; 
+    nFS = length(surf.coord);
+end
+
+ses = 'ses-01';
+
+%% structural info
+
+metric = ['ADC'];
+surfname = 'fsLR-32k';
+label = 'midthickness';
+
+nSub = 102;
+mean = nan(nSub, nFS); % populate array with size subjects x voxels
+
+%% load parcellation
+    
+parcName = 'economo';
+parcIDsL = [20 19 14]; % I_FJK I_IA I_IB
+parcIDsR = [64 63 58];
+nInsulaRoi = length(parcIDsL);
+   
+
+for sub = 1:133 % last ID in Spacetop dataset
+    
+    id = sprintf('sub-%04d', sub); % BIDS format ID
+
+    dwi_maps_dir = [micapipe_deriv, '/', id, '/', ses, '/maps'];
+
+    try
+        % Left
+        hemi = 'L';
+        fname = [dwi_maps_dir, '/', id, '_', ses, ...
+                 '_hemi-', hemi, '_surf-', surfname, ...
+                 '_label-', label, '_', metric,'.func.gii'];
+        g = gifti(fname);
+        dataL = g.cdata;
+
+        % Right
+        hemi = 'R';
+        fname = [dwi_maps_dir, '/', id, '_', ses, ...
+                 '_hemi-', hemi, '_surf-', surfname, ...
+                 '_label-', label, '_', metric,'.func.gii'];
+        g = gifti(fname);
+        dataR = g.cdata;
+
+    catch
+        fprintf('Skipping %s\n', id);
+        continue
+    end
+
+    val = [dataL; dataR];
+
+    ADC = SurfStatSmooth(val', surf, 5); % smooth
+
+    mean(sub, :) = ADC;   % store subject row
+
+end
+
+mean = nanmean(mean, 1);
+
+SurfStatViewData(mean, surf);
+colormap(parula);
+
+if strcmp(metric,'ADC') == 1
+    SurfStatColLim([0.0003,0.0015]);
+end
+
+
