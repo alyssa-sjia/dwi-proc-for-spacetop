@@ -1,0 +1,223 @@
+%% init
+% NOTE : dependencies
+% micaopen: SurfStat - see also BrainStat for similar functions
+% micasoft: mica_parcelData2surfData
+% gifti: in micasoft but can also be downloaded directly
+% micapipe: surface files
+
+for set_directories = 1
+    
+    % directories
+    GH = '/data/u_nunnink_software';
+    micaopen = [GH, '/micaopen'];
+    micapipe = [GH, '/micapipe'];
+    giftidir  = [GH, '/gifti'];
+    dataset = '/data/p_03140/BIDS_spacetop';
+    deriv_dir = [dataset, '/derivatives'];
+    micapipe_deriv = [deriv_dir, '/micapipe_v0.2.0'];
+    
+    % set path
+    addpath(genpath([micaopen,'/surfstat']));
+    addpath(genpath([micaopen,'/mica_powertools']));
+    addpath(genpath([GH, '/gifti']));
+
+    % surface
+    tmp = gifti([micapipe,'/surfaces/fsLR-32k.L.surf.gii']);
+    % tmp = gifti([micapipe,'/surfaces/fsLR-32k.L.inflated.surf.gii']);
+    lh = struct(); lh.coord = tmp.vertices'; lh.tri = tmp.faces;
+    tmp = gifti([micapipe,'/surfaces/fsLR-32k.R.surf.gii']);
+    % tmp = gifti([micapipe,'/surfaces/fsLR-32k.R.inflated.surf.gii']);
+    rh = struct(); rh.coord = tmp.vertices'; rh.tri = tmp.faces;
+    clear tmp
+    surf = struct(); surf.coord = [lh.coord, rh.coord]; surf.tri = [lh.tri; rh.tri+max(max(lh.tri))]; 
+    nFS = length(surf.coord);
+end
+
+%% subject info
+
+id = 'sub-0037';
+ses = 'ses-01';
+
+%% structural info
+
+metric = ['ADC'];
+surfname = 'fsLR-32k';
+label = 'midthickness';
+
+nSub = 102;
+
+%% to plot all subjects
+% figure('Color','w','Position',[100 100 2000 2000])
+% t = tiledlayout(12,10,'TileSpacing','compact','Padding','compact');
+% colormap(parula)
+
+%% load parcellation
+    
+    parcName = 'economo';
+    parcIDsL = [19 20 14];
+    parcIDsR = [63 64 58];
+    nInsulaRoi = length(parcIDsL);
+    
+    for load_parc = 1
+        
+        % Read parcellation for C69
+        parcFS = csvread([micapipe, '/parcellations/', parcName, '_conte69.csv']);
+        parcFS = parcFS + 1;
+    
+        uparc = unique(parcFS);
+        parcFSR = parcFS(nFS/2+1:end);
+        uparcR = unique(parcFSR);
+        
+        maskCol = 1; % value of mask in parcellation
+        maskIdxFS = find(parcFS == maskCol(1));
+        maskParc = zeros(1,nFS); maskParc(1,maskIdxFS) = 1;
+        
+    end
+    
+    % isolate insula parcels 
+    insulaRoiL = zeros(size(parcFS));
+    insulaRoiR = zeros(size(parcFS));
+    for ii = 1:nInsulaRoi
+        insulaRoiL(parcFS == parcIDsL(ii)) = ii;
+        insulaRoiR(parcFS == parcIDsR(ii)) = ii;
+    end
+
+    % all_topMask = false(nSub, nFS);
+    % all_topVals = nan(nSub, nFS);
+    
+
+% Loop is to plot all subjects
+
+% for sub = 1:133
+% 
+%     id = sprintf('sub-%04d', sub);
+
+    dwi_maps_dir = [micapipe_deriv, '/', id, '/', ses, '/maps'];
+
+    % load diffusion file
+    hemi = 'L';
+    fname = [dwi_maps_dir, '/', id, '_', ses, '_hemi-', hemi, '_surf-', surfname, '_label-', label, '_', metric,'.func.gii'];
+    disp(fname)
+    try
+         g = gifti(fname);
+    catch
+        fprintf('Skipping %s (file not found or invalid)\n', id);
+        % continue
+    end
+    dataL = g.cdata;
+    nVertL = length(dataL);
+    
+    hemi = 'R';
+    fname = [dwi_maps_dir, '/', id, '_', ses, '_hemi-', hemi, '_surf-', surfname, '_label-', label, '_', metric,'.func.gii'];
+    g = gifti(fname);
+    dataR = g.cdata;
+    nVertR = length(dataR);
+    
+    val = [dataL; dataR];
+    
+    valsm = SurfStatSmooth(val',surf,5); % change var name to metric
+    figure, SurfStatViewData(valsm,surf,metric); colormap(parula); %SurfStatColLim([0, 1]);
+
+
+    %% to plot all subjects on same axes
+
+    % ax = nexttile;          % get tile axes
+    % axes(ax);               % force MATLAB to use it
+    % cla(ax);                % clear tile just in case
+
+%     ax = nexttile;
+% 
+%     trisurf(surf.tri, ...
+%             surf.coord(1,:), ...
+%             surf.coord(2,:), ...
+%             surf.coord(3,:), ...
+%             FA, ...
+%             'EdgeColor','none');
+% 
+%     view(90,0)
+%     axis off
+%     caxis([0 1])
+%     lighting phong
+%     camlight
+%     title(id,'FontSize',6)
+% 
+%     drawnow
+
+
+    %% threshold insula mask at 75th percentile
+
+    insulaMask = ismember(parcFS, parcIDsR); %R hemi only
+    roiVals = valsm(insulaMask);
+
+    thr = prctile(roiVals, 75);
+    topMask = val >= thr & insulaMask; % change to <= for min, not max, vals
+
+    topVals = zeros(1, nFS);
+    topVals(topMask) = val(topMask);
+
+    figure,SurfStatViewData(double(topMask), surf); colormap(parula);
+    figure,SurfStatViewData(topVals, surf); colormap(parula);
+
+    % uncomment below to store thresholded vals for all subjects
+    % all_topMask(sub, :) = topMask;
+    % all_topVals(sub, topMask) = ADC(topMask);
+
+% end
+    
+
+%% Check for differences in metric across insula parcels
+LVals = {};
+LroiID = {};
+for roi = 1:nInsulaRoi
+    roiIdx = find(insulaRoiL == roi);
+    LVals{roi} = val(roiIdx);
+end
+
+% Right
+RVals = {};
+RroiID = {};
+for roi = 1:nInsulaRoi
+    roiIdx = find(insulaRoiR == roi);
+    RVals{roi} = val(roiIdx);
+end
+
+allVals = [];
+roiID   = [];
+hemiID  = [];
+
+
+for roi = 1:nInsulaRoi
+    
+     % Left
+    nL = length(LVals{roi});
+    allVals = [allVals; LVals{roi}];
+    roiID   = [roiID; ones(nL,1)*roi];
+    hemiID  = [hemiID; repmat({'L'}, nL, 1)];
+    
+    % Right
+    nR = length(RVals{roi});
+    allVals = [allVals; RVals{roi}];
+    roiID   = [roiID; ones(nR,1)*roi];
+    hemiID  = [hemiID; repmat({'R'}, nR, 1)];
+    
+end
+
+roiNames = {'I_IA','I_IB','I_FJK'};
+roiCat = categorical(roiID, 1:nInsulaRoi, roiNames);
+
+figure
+boxplot(allVals, {roiCat, hemiID})
+xlabel('ROI')
+ylabel('Metric value')
+if strcmp(metric, 'ADC') == 1
+    ylim([0.0005, 0.001]);
+end
+
+
+%% Visualise plotted ROIs
+figure, SurfStatViewData(insulaRoiL,surf); colormap(parula); 
+figure, SurfStatViewData(insulaRoiR,surf); colormap(parula); 
+
+
+
+
