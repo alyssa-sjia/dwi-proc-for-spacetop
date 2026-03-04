@@ -1,0 +1,183 @@
+%% init
+% NOTE : dependencies
+% micaopen: SurfStat - see also BrainStat for similar functions
+% micasoft: mica_parcelData2surfData
+% gifti: in micasoft but can also be downloaded directly
+% micapipe: surface files
+
+for set_directories = 1
+    
+    % directories
+    GH = '/data/u_nunnink_software';
+    micaopen = [GH, '/micaopen'];
+    micapipe = [GH, '/micapipe'];
+    giftidir  = [GH, '/gifti'];
+    dataset = '/data/p_03140/BIDS_spacetop';
+    deriv_dir = [dataset, '/derivatives'];
+    micapipe_deriv = [deriv_dir, '/micapipe_v0.2.0'];
+    
+    % set path
+    addpath(genpath([micaopen,'/surfstat']));
+    addpath(genpath([micaopen,'/mica_powertools']));
+    addpath(genpath([GH, '/gifti']));
+
+    % surface
+    tmp = gifti([micapipe,'/surfaces/fsLR-32k.L.surf.gii']);
+    % tmp = gifti([micapipe,'/surfaces/fsLR-32k.L.inflated.surf.gii']);
+    lh = struct(); lh.coord = tmp.vertices'; lh.tri = tmp.faces;
+    tmp = gifti([micapipe,'/surfaces/fsLR-32k.R.surf.gii']);
+    % tmp = gifti([micapipe,'/surfaces/fsLR-32k.R.inflated.surf.gii']);
+    rh = struct(); rh.coord = tmp.vertices'; rh.tri = tmp.faces;
+    clear tmp
+    surf = struct(); surf.coord = [lh.coord, rh.coord]; surf.tri = [lh.tri; rh.tri+max(max(lh.tri))]; 
+    nFS = length(surf.coord);
+end
+
+vertexY = surf.coord(2,:);
+vertexZ= surf.coord(3,:);
+
+%% subject info
+ses = 'ses-01';
+
+%% structural info
+
+metric = ['ADC'];
+surfname = 'fsLR-32k';
+label = 'midthickness';
+
+nSub = 102;
+allValsm = nan(nSub, nFS);
+
+%% load parcellation
+    
+parcName = 'economo';
+parcIDsL = [19 20 14];
+parcIDsR = [63 64 58];
+nInsulaRoi = length(parcIDsL);
+
+for load_parc = 1
+    
+    % read parcellation for C69
+    parcFS = csvread([micapipe, '/parcellations/', parcName, '_conte69.csv']);
+    parcFS = parcFS + 1;
+
+    uparc = unique(parcFS);
+    parcFSR = parcFS(nFS/2+1:end);
+    uparcR = unique(parcFSR);
+    
+    maskCol = 1; % value of mask in parcellation
+    maskIdxFS = find(parcFS == maskCol(1));
+    maskParc = zeros(1,nFS); maskParc(1,maskIdxFS) = 1;
+    
+end
+
+% isolate insula parcels 
+insulaRoiL = zeros(size(parcFS));
+insulaRoiR = zeros(size(parcFS));
+for ii = 1:nInsulaRoi
+    insulaRoiL(parcFS == parcIDsL(ii)) = ii;
+    insulaRoiR(parcFS == parcIDsR(ii)) = ii;
+end
+
+insulaMaskL = insulaRoiL > 0;
+insulaMaskR = insulaRoiR > 0;
+
+% all_topMask = false(nSub, nFS);
+% all_topVals = nan(nSub, nFS);
+
+
+
+for sub = 1:133
+
+    dwi_maps_dir = [micapipe_deriv, '/', id, '/', ses, '/maps'];
+
+    % load diffusion file
+    hemi = 'L';
+    fname = [dwi_maps_dir, '/', id, '_', ses, '_hemi-', hemi, '_surf-', surfname, '_label-', label, '_', metric,'.func.gii'];
+    disp(fname)
+    try
+         g = gifti(fname);
+    catch
+        fprintf('Skipping %s (file not found or invalid)\n', id);
+        continue
+    end
+    dataL = g.cdata;
+    nVertL = length(dataL);
+    
+    hemi = 'R';
+    fname = [dwi_maps_dir, '/', id, '_', ses, '_hemi-', hemi, '_surf-', surfname, '_label-', label, '_', metric,'.func.gii'];
+    g = gifti(fname);
+    dataR = g.cdata;
+    nVertR = length(dataR);
+    
+    val = [dataL; dataR];
+    
+    valsm = SurfStatSmooth(val',surf,5); % change var name to metric
+
+    allValsm(sub,:) = valsm(:)';
+
+end
+
+meanVertex = mean(allValsm, 1, 'omitnan');
+stdVertex  = std(allValsm, 0, 1, 'omitnan');
+semVertex  = stdVertex ./ sqrt(nSub);
+
+nHemi = nFS / 2;
+
+    
+
+% left hemisphere
+meanL  = meanVertex(nHemi+1:nFS);
+semL   = semVertex(nHemi+1:nFS);
+yCoordL = vertexY(nHemi+1:nFS);
+zCoordL = vertexZ(nHemi+1:nFS);
+
+roiIDL = insulaRoiL(nHemi+1:nFS);
+maskL  = roiIDL > 0;
+
+
+% mask everything
+
+meanL   = meanL(maskL);
+semL    = semL(maskL);
+yCoordL = yCoordL(maskL);
+zCoordL = zCoordL(maskL);
+roiIDL  = roiIDL(maskL);
+
+
+roiNames = {'I_I_A','I_I_B','I_F_J_K'};
+
+
+
+% make scatter plot
+figure
+hold on
+
+colors = lines(nInsulaRoi);
+h = gobjects(nInsulaRoi,1);
+
+for roi = 1:nInsulaRoi
+    
+    idx = roiIDL == roi;
+    
+    h(roi) = errorbar( ...
+        yCoordL(idx), ...
+        meanL(idx), ...
+        semL(idx), ...
+        'o', ...
+        'Color', colors(roi,:), ...
+        'MarkerFaceColor', colors(roi,:));
+end
+
+
+xlabel('Vertex Y-coordinate')
+ylabel('Mean intensity across subjects')
+title('Left insula vertices')
+
+roiNames = {'I_I_A','I_I_B','I_F_J_K'};
+legend(h, roiNames)
+
+
+
+
+
